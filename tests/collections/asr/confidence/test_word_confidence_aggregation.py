@@ -21,9 +21,11 @@ characters that carry no SentencePiece word-boundary marker.
 """
 
 import re
+from types import SimpleNamespace
 
 import pytest
 
+from nemo.collections.asr.parts.submodules.ctc_decoding import CTCBPEDecoding
 from nemo.collections.asr.parts.utils.asr_confidence_utils import ConfidenceMixin
 
 UNDERLINE = '▁'  # SentencePiece word-boundary marker
@@ -57,9 +59,7 @@ def _run(vocab, ids, confidences=None):
     agg = _FakeAgg(vocab)
     text = agg.decode_ids_to_str(ids)
     words = text.split()
-    wc = agg._aggregate_token_confidence_subwords_sentencepiece(
-        words, confidences or [1.0] * len(ids), ids
-    )
+    wc = agg._aggregate_token_confidence_subwords_sentencepiece(words, confidences or [1.0] * len(ids), ids)
     return words, wc
 
 
@@ -164,6 +164,36 @@ def test_default_oracle_still_follows_the_raw_decode():
     words, wc = _run(vocab, [1, 2, 3], [0.9, 0.1, 0.8])
     assert words == ["CDU", "-", "CSU"]
     assert wc == pytest.approx([0.9, 0.1, 0.8])
+
+
+class _FakeCTCBPE(_StripPunctAgg):
+    """Runs the real ``CTCBPEDecoding._aggregate_token_confidence``, whose hypothesis text is
+    decoded with punctuation stripping."""
+
+    _aggregate_token_confidence = CTCBPEDecoding._aggregate_token_confidence
+
+    def decode_tokens_to_str(self, ids):
+        return self.decode_ids_to_str(ids)
+
+    def decode_tokens_to_str_with_strip_punctuation(self, ids):
+        return self.decode_with_strip_punctuation(ids)
+
+
+@pytest.mark.unit
+def test_ctc_bpe_word_confidence_follows_the_stripped_text():
+    # The CTC text is "CDU- CSU" (2 words), so there must be two confidences, the dash on the first.
+    vocab = {
+        1: (f"{UNDERLINE}CDU", f"{UNDERLINE}CDU"),
+        2: (f"{UNDERLINE}-", f"{UNDERLINE}-"),
+        3: (f"{UNDERLINE}CSU", f"{UNDERLINE}CSU"),
+    }
+    agg = _FakeCTCBPE(vocab)
+    ids = [1, 2, 3]
+    hypothesis = SimpleNamespace(text=(ids, [1, 1, 1]), token_confidence=[0.9, 0.1, 0.8])
+
+    wc = agg._aggregate_token_confidence(hypothesis)
+    assert len(wc) == len(agg.decode_tokens_to_str_with_strip_punctuation(ids).split())
+    assert wc == pytest.approx([0.5, 0.8])
 
 
 class _CountingAgg(_FakeAgg):
