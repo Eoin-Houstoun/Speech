@@ -262,3 +262,25 @@ def test_large_sequence_with_byte_fallback_whitespace_oracle_scales():
 
     words, wc = _run(vocab, ids)
     assert len(wc) == len(words)
+
+
+@pytest.mark.unit
+def test_lone_underline_before_mark_stripped():
+    vocab = {
+        1: (f'{UNDERLINE}son', f'{UNDERLINE}son'),
+        2: (UNDERLINE, UNDERLINE),
+        3: (',', ','),
+        4: (f'{UNDERLINE}and', f'{UNDERLINE}and'),
+    }
+    agg = _StripPunctAgg(vocab)
+    ids = [1, 2, 3, 4]
+    words = agg.decode_with_strip_punctuation(ids).split()
+    assert words == ['son,', 'and']
+
+    wc = agg._aggregate_token_confidence_subwords_sentencepiece(
+        words,
+        [0.9, 0.2, 0.8, 0.7],
+        ids,
+        agg.decode_with_strip_punctuation,
+    )
+    assert wc == pytest.approx([(0.9 + 0.2 + 0.8) / 3, 0.7])
