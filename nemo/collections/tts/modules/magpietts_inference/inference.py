@@ -1,4 +1,5 @@
-# Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -157,6 +158,7 @@ class EasyMagpieInferenceConfig(BaseInferenceConfig):
     phoneme_input_type: str = "gt"
     phoneme_sampling_method: str = "argmax"
     dropout_text_input: bool = False
+    precomputed_context_audio_embeddings_path: Optional[str] = None
 
     def build_identifier(self) -> str:
         parts = [
@@ -885,6 +887,15 @@ class EasyMagpieInferenceRunner(BaseInferenceRunner):
 
     def __init__(self, model, config: EasyMagpieInferenceConfig):
         super().__init__(model, config)
+        self._precomputed_audio_embeddings = None
+        self._current_precomputed_audio_embedding = None
+        if config.precomputed_context_audio_embeddings_path:
+            table = torch.load(
+                config.precomputed_context_audio_embeddings_path,
+                map_location="cpu",
+                weights_only=True,
+            )
+            self._precomputed_audio_embeddings = table["audio_embeddings"]
 
     def create_dataset(
         self,
@@ -896,6 +907,28 @@ class EasyMagpieInferenceRunner(BaseInferenceRunner):
             context_duration_min, context_duration_max
         )
         self._read_and_cache_manifest(dataset_meta)
+        dataset_name = next(iter(dataset_meta))
+        embedding_key = dataset_meta[dataset_name].get("precomputed_context_audio_embedding_key")
+        if embedding_key is None:
+            self._current_precomputed_audio_embedding = None
+        elif embedding_key == "__zero__":
+            # Explicit text-only conditioning; a missing key instead uses the manifest's audio context.
+            self._current_precomputed_audio_embedding = torch.empty(0, self.model.cfg.embedding_dim)
+        else:
+            if self._precomputed_audio_embeddings is None:
+                raise ValueError(
+                    "Dataset requests a precomputed context audio embedding, but no embedding table was provided."
+                )
+            if embedding_key not in self._precomputed_audio_embeddings:
+                raise KeyError(f"Unknown precomputed context audio embedding key: {embedding_key}")
+            self._current_precomputed_audio_embedding = self._precomputed_audio_embeddings[embedding_key]["embedding"]
+        dataset_meta = {
+            dataset_name: {
+                key: value
+                for key, value in dataset_meta[dataset_name].items()
+                if key != "precomputed_context_audio_embedding_key"
+            }
+        }
 
         logging.info("Creating inference dataset for decoder-only model")
         dataset = MagpieTTSDataset(
@@ -918,6 +951,10 @@ class EasyMagpieInferenceRunner(BaseInferenceRunner):
             context_duration_min=context_duration_min,
             context_duration_max=context_duration_max,
             ignore_phoneme_languages=self.model.cfg.get('ignore_phoneme_languages', []),
+            enable_phoneme_text_input=self.model.enable_phoneme_text_input,
+            text_phoneme_token_offset=self.model.text_phoneme_token_offset,
+            phoneme_text_bop_marker=self.model.phoneme_text_bop_marker,
+            phoneme_text_eop_marker=self.model.phoneme_text_eop_marker,
             add_language_to_context_text=self.model.add_language_to_context_text,
             default_tokenizer_name=self.config.default_tokenizer_name,
         )
@@ -975,6 +1012,16 @@ class EasyMagpieInferenceRunner(BaseInferenceRunner):
         for batch_idx, batch in enumerate(dataloader):
             logging.info(f"Processing batch {batch_idx + 1}/{len(dataloader)}")
             batch = self._batch_to_cuda(batch)
+            if self._current_precomputed_audio_embedding is not None:
+                batch_size = batch['text'].size(0)
+                audio_embedding = self._current_precomputed_audio_embedding.to(batch['text'].device)
+                batch['precomputed_context_audio_embedding'] = audio_embedding.unsqueeze(0).expand(batch_size, -1, -1)
+                batch['precomputed_context_audio_embedding_lens'] = torch.full(
+                    (batch_size,),
+                    audio_embedding.size(0),
+                    dtype=torch.long,
+                    device=batch['text'].device,
+                )
             output = self.model.infer_batch(
                 batch,
                 max_decoder_steps=self.config.model_inference_parameters.max_decoder_steps,

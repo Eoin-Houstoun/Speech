@@ -1,6 +1,7 @@
 # Copyright 2018 The Google AI Language Team Authors and
 # The HuggingFace Inc. team.
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -111,7 +112,8 @@ class TransformerEmbedding(nn.Module):
 
         # prepare position embedding for asynchronius decoding (canary streaming)
         if torch.is_tensor(start_pos):
-            shift_pos = start_pos.unsqueeze(-1)
+            # under tracing the shape-derived start position is a CPU tensor even for CUDA inputs
+            shift_pos = start_pos.unsqueeze(-1).to(input_ids.device)
             start_pos = 0
         else:
             shift_pos = None

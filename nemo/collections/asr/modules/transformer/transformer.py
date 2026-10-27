@@ -1,4 +1,5 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -265,8 +266,10 @@ class TransformerDecoderNM(DecoderModule, Exportable):
             A tuple of input examples.
         """
         sample = next(self.parameters())
+        # ids must exist in the vocabulary and positions in the fixed positional table
+        max_dim = min(max_dim, self._max_sequence_length)
         sz = (max_batch, max_dim)
-        input_ids = torch.randint(low=0, high=2048, size=sz, device=sample.device)
+        input_ids = torch.randint(low=0, high=self._vocab_size, size=sz, device=sample.device)
         encoder_mask = torch.randint(low=0, high=1, size=sz, device=sample.device)
         mem_size = [max_batch, self.num_states, max_dim - 1, self._hidden_size]
         decoder_mems = torch.rand(mem_size, device=sample.device)
