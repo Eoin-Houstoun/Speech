@@ -443,14 +443,13 @@ def test_rnnt_bpe_word_confidence_follows_the_stripped_text():
     assert agg._aggregate_token_confidence(hypothesis) == pytest.approx([0.5, 0.8])
 
 
-_TOKENIZERS = os.path.join(os.path.dirname(__file__), "..", "..", "..", ".data", "asr", "tokenizers")
-
-
 class _RealSentencePieceAgg(_StripPunctAgg):
     """The aggregation over a real SentencePiece model, decoded as the decoders' tokenizers do."""
 
-    def __init__(self, name):
-        self.sp = spm.SentencePieceProcessor(model_file=os.path.join(_TOKENIZERS, name, "tokenizer.model"))
+    def __init__(self, model_file):
+        # No fake vocabulary: the real model replaces both decode methods.
+        super().__init__({})
+        self.sp = spm.SentencePieceProcessor(model_file=model_file)
 
     def decode_ids_to_tokens(self, ids):
         return [self.sp.id_to_piece(int(i)) for i in ids]
@@ -480,8 +479,8 @@ def _per_word_expected(sp, text, confidences):
         ("canary", "a b c"),
     ],
 )
-def test_real_sentencepiece_word_confidence(name, text):
-    agg = _RealSentencePieceAgg(name)
+def test_real_sentencepiece_word_confidence(test_data_dir, name, text):
+    agg = _RealSentencePieceAgg(os.path.join(test_data_dir, "asr", "tokenizers", name, "tokenizer.model"))
     ids = agg.sp.encode(text)
     assert agg.sp.piece_to_id(UNDERLINE) in ids
     confidences = [round(0.1 + 0.8 * (k % 7) / 6, 3) for k in range(len(ids))]
